@@ -1,0 +1,15 @@
+{
+    "IsEncrypted": false,
+    "Values": {
+        "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+        "FUNCTIONS_WORKER_RUNTIME": "dotnet-isolated",
+        "Auth0:Domain": "dev-xxx.us.auth0.com",
+        "Auth0:BackendClientId": "",
+        "Auth0:BackendClientSecret": "",
+        "Auth0:ManagementClientId": "",
+        "Auth0:ManagementClientSecret": "",
+        "Auth0:PasswordlessConnection": "email",
+        "Auth0:Audience": "",
+        "Auth0:ManagementAudience": ""
+    }
+}
