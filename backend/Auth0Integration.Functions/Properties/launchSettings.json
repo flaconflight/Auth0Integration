@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "Auth0Integration.Functions": {
+      "commandName": "Project",
+      "commandLineArgs": "--port 7118",
+      "launchBrowser": false
+    }
+  }
+}
