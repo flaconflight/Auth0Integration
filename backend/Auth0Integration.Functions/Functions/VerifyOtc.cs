@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
@@ -72,22 +73,79 @@ public class VerifyOtc
 
             _logger.LogInformation("User {Sub} authenticated via OTC", sub);
 
-            if (creditEntry.CreditContext.ValueKind != JsonValueKind.Undefined &&
-                creditEntry.CreditContext.ValueKind != JsonValueKind.Null)
-            {
-                var enrichedMetadata = new Dictionary<string, object>
-                {
-                    ["creditApplication"] = creditEntry.CreditContext
-                };
-
-                var metadataElement = JsonSerializer.SerializeToElement(enrichedMetadata);
-                await _auth0Mgmt.UpdateUserAppMetadataAsync(sub, metadataElement);
-                _logger.LogInformation("Credit context written to app_metadata for user {Sub}", sub);
-            }
-
             _store.Remove(request.Otc);
 
             var userJson = await _auth0Mgmt.GetUserAsync(sub);
+
+            if (creditEntry.CreditContext.ValueKind != JsonValueKind.Undefined &&
+                creditEntry.CreditContext.ValueKind != JsonValueKind.Null)
+            {
+                var existingApps = new List<JsonElement>();
+                if (userJson.TryGetProperty("app_metadata", out var existingMetadata) &&
+                    existingMetadata.ValueKind == JsonValueKind.Object &&
+                    existingMetadata.TryGetProperty("creditApplications", out var existingAppsProp) &&
+                    existingAppsProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var app in existingAppsProp.EnumerateArray())
+                    {
+                        existingApps.Add(app);
+                    }
+                }
+
+                var newAppId = creditEntry.CreditContext.TryGetProperty("applicationId", out var idProp)
+                    ? idProp.GetString()
+                    : null;
+
+                if (newAppId != null && existingApps.Any(a =>
+                    a.TryGetProperty("applicationId", out var eid) && eid.GetString() == newAppId))
+                {
+                    return await CreateErrorResponse(req, HttpStatusCode.Conflict, "duplicate_application",
+                        $"Credit application {newAppId} is already linked to this user.");
+                }
+
+                var enrichedNode = JsonNode.Parse(creditEntry.CreditContext.GetRawText());
+                if (enrichedNode is JsonObject enrichedObj)
+                {
+                    enrichedObj["linkedAt"] = DateTime.UtcNow.ToString("O");
+                    enrichedObj["linkedByOtc"] = true;
+                }
+
+                existingApps.Add(JsonSerializer.SerializeToElement(enrichedNode));
+
+                using var metaStream = new MemoryStream();
+                using (var metaWriter = new Utf8JsonWriter(metaStream))
+                {
+                    metaWriter.WriteStartObject();
+
+                    if (existingMetadata.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var prop in existingMetadata.EnumerateObject())
+                        {
+                            if (prop.Name != "creditApplications")
+                            {
+                                prop.WriteTo(metaWriter);
+                            }
+                        }
+                    }
+
+                    metaWriter.WriteStartArray("creditApplications");
+                    foreach (var app in existingApps)
+                    {
+                        app.WriteTo(metaWriter);
+                    }
+                    metaWriter.WriteEndArray();
+
+                    metaWriter.WriteEndObject();
+                    metaWriter.Flush();
+                }
+
+                var metadataElement = JsonSerializer.Deserialize<JsonElement>(metaStream.ToArray());
+                await _auth0Mgmt.UpdateUserAppMetadataAsync(sub, metadataElement);
+                _logger.LogInformation("Credit application {AppId} linked to user {Sub}", newAppId ?? "unknown", sub);
+
+                userJson = await _auth0Mgmt.GetUserAsync(sub);
+            }
+
             var roles = await _auth0Mgmt.GetUserRolesAsync(sub);
 
             var userProfile = new UserProfile

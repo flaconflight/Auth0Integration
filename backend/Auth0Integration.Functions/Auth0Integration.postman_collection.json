@@ -1,0 +1,200 @@
+{
+  "info": {
+    "name": "Auth0Integration POC",
+    "description": "Postman collection for testing the Auth0 Passwordless + Azure Functions POC.\n\n## Setup\n1. Import this collection\n2. Create an environment with the variables below\n3. Call the endpoints in order:\n   Start → Verify → Profile",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Passwordless Start",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    var json = pm.response.json();",
+              "    pm.collectionVariables.set('correlationId', json.correlationId);",
+              "    console.log('Correlation ID: ' + json.correlationId);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "x-functions-key",
+            "value": "{{functionKey}}",
+            "description": "Azure Function auth key (if configured). Leave empty for local dev."
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{endUserEmail}}\",\n  \"creditContext\": {\n    \"applicationId\": \"APP-{{$timestamp}}\",\n    \"loanAmount\": 50000,\n    \"purpose\": \"home_improvement\",\n    \"stage\": \"initiated\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/passwordless/start",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "passwordless", "start"]
+        },
+        "description": "Initiates passwordless authentication. Called by the admin system.\nAuth0 sends a one-time code to the end user's email."
+      },
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"message\": \"Verification code sent to user@example.com\",\n  \"correlationId\": \"a1b2c3d4e5f6...\"\n}"
+        },
+        {
+          "name": "Bad Request",
+          "status": "Bad Request",
+          "code": 400,
+          "body": "{\n  \"error\": \"invalid_request\",\n  \"message\": \"Email is required\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "2. Verify OTC",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{endUserEmail}}\",\n  \"otc\": \"{{otcCode}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/auth/verify-otc",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "auth", "verify-otc"]
+        },
+        "description": "Exchanges the one-time code (received via email) for Auth0 tokens.\nThe OTC + email are validated against Auth0 server-side.\nAfter success, the access token is stored in the collection variable 'accessToken'.\n\n## Instructions\n1. Check your email for the 8-character code from Auth0\n2. Paste the code as the 'otcCode' environment variable\n3. Send this request"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    var json = pm.response.json();",
+              "    pm.collectionVariables.set('accessToken', json.access_token);",
+              "    pm.collectionVariables.set('userId', json.user.sub);",
+              "    console.log('Access token stored');",
+              "    console.log('User ID: ' + json.user.sub);",
+              "}"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"access_token\": \"eyJ...\",\n  \"id_token\": \"eyJ...\",\n  \"token_type\": \"Bearer\",\n  \"expires_in\": 86400,\n  \"user\": {\n    \"sub\": \"auth0|63abc...\",\n    \"email\": \"user@example.com\",\n    \"app_metadata\": {\n      \"creditApplication\": {\n        \"applicationId\": \"APP-001\",\n        \"loanAmount\": 50000\n      }\n    }\n  }\n}"
+        },
+        {
+          "name": "OTC Expired",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\n  \"error\": \"invalid_otc\",\n  \"message\": \"The verification code is invalid or expired. Please request a new code.\"\n}"
+        },
+        {
+          "name": "Email Mismatch",
+          "status": "Bad Request",
+          "code": 400,
+          "body": "{\n  \"error\": \"email_mismatch\",\n  \"message\": \"This code was issued for other@email.com. Please contact your administrator.\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "3. Get User Profile",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/user/profile",
+          "host": ["{{baseUrl}}"],
+          "path": ["api", "user", "profile"]
+        },
+        "description": "Returns the authenticated user's profile including:\n- Email and verification status\n- Custom app_metadata (credit application context)\n- User metadata\n- Assigned roles"
+      },
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"sub\": \"auth0|63abc...\",\n  \"email\": \"user@example.com\",\n  \"email_verified\": true,\n  \"app_metadata\": {\n    \"creditApplication\": {\n      \"applicationId\": \"APP-001\",\n      \"loanAmount\": 50000\n    }\n  },\n  \"user_metadata\": {},\n  \"roles\": []\n}"
+        },
+        {
+          "name": "Unauthorized",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\n  \"error\": \"unauthorized\",\n  \"message\": \"Missing Authorization header\"\n}"
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:7071",
+      "type": "string",
+      "description": "Azure Functions base URL. Default is local dev port."
+    },
+    {
+      "key": "endUserEmail",
+      "value": "",
+      "type": "string",
+      "description": "The end user's email address (where the OTC will be sent)."
+    },
+    {
+      "key": "otcCode",
+      "value": "",
+      "type": "string",
+      "description": "The one-time code received via email from Auth0 (8 characters)."
+    },
+    {
+      "key": "functionKey",
+      "value": "",
+      "type": "string",
+      "description": "Azure Function-level auth key. Leave empty for local development."
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string",
+      "description": "Auto-populated after OTC verification. Used for authenticated requests."
+    },
+    {
+      "key": "correlationId",
+      "value": "",
+      "type": "string",
+      "description": "Auto-populated after starting passwordless flow."
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string",
+      "description": "Auto-populated after OTC verification (the Auth0 sub claim)."
+    }
+  ]
+}
